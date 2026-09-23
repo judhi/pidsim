@@ -1,0 +1,857 @@
+<!DOCTYPE html>
+<html lang="en" class="dark h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mobile Robot PID Trajectory Simulator</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        darkbg: '#090d16',
+                        cardbg: '#111827',
+                        cardborder: '#1f293d',
+                        accent: '#38bdf8',
+                        robot: '#f59e0b',
+                        targetpath: '#3b82f6',
+                        actualpath: '#10b981',
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        /* Force viewport fit - no scrolling permitted */
+        html, body {
+            height: 100vh;
+            width: 100vw;
+            overflow: hidden;
+            margin: 0;
+            padding: 0;
+            user-select: none;
+        }
+        
+        /* Compact, high-density sliders */
+        input[type=range] {
+            accent-color: #38bdf8;
+            height: 4px;
+        }
+
+        /* Micro numeric input styling */
+        input[type=number]::-webkit-inner-spin-button, 
+        input[type=number]::-webkit-outer-spin-button { 
+            -webkit-appearance: none;
+            margin: 0;
+        }
+        input[type=number] {
+            -moz-appearance: textfield;
+        }
+
+        /* Custom scrollbar fallback if screen size is extremely miniature */
+        ::-webkit-scrollbar {
+            width: 4px;
+            height: 4px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #090d16;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #1f293d;
+            border-radius: 2px;
+        }
+    </style>
+</head>
+<body class="bg-darkbg text-slate-200 font-sans h-screen w-screen flex flex-col antialiased selection:bg-sky-500 selection:text-white">
+
+    <!-- Top Compact Header Bar -->
+    <header class="h-10 bg-cardbg border-b border-cardborder px-3 flex items-center justify-between shrink-0 shadow-sm z-20">
+        <div class="flex items-center gap-2">
+            <div class="px-1.5 py-0.5 bg-sky-500/10 text-sky-400 rounded border border-sky-500/20 text-xs font-bold">
+                <i class="fa-solid fa-robot"></i>
+            </div>
+            <h1 class="text-xs font-bold text-white tracking-tight">Robotics PID Controller Studio</h1>
+            <span class="text-[10px] text-slate-500 hidden sm:inline">| Trajectory Tracking & System Dynamics</span>
+        </div>
+
+        <div class="flex items-center gap-2">
+            <!-- Preset Selector -->
+            <div class="flex items-center gap-1.5">
+                <span class="text-[10px] text-slate-400 uppercase font-semibold">Presets:</span>
+                <select id="presetSelect" class="bg-slate-900 border border-cardborder text-[11px] rounded px-2 py-0.5 text-sky-400 font-medium focus:outline-none cursor-pointer">
+                    <option value="tuned" selected>✨ Well-Tuned PID</option>
+                    <option value="unstable">⚠️ High Kp Oscillations</option>
+                    <option value="windup">🌀 Integral Windup</option>
+                    <option value="noisy">📡 Noisy Sensor Response</option>
+                    <option value="p_only">🎯 Proportional Only</option>
+                    <option value="pd_only">⚡ PD (No Bias Correction)</option>
+                </select>
+            </div>
+
+            <!-- Run Control Buttons -->
+            <div class="flex items-center gap-1 bg-slate-900/80 p-0.5 rounded border border-cardborder">
+                <button id="btnPlayPause" class="px-2.5 py-0.5 rounded bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold transition flex items-center gap-1 text-[11px]" title="Play / Pause">
+                    <i id="playIcon" class="fa-solid fa-pause"></i> <span id="playText">Pause</span>
+                </button>
+                <button id="btnReset" class="p-1 rounded hover:bg-slate-800 text-slate-300 transition text-[11px] px-2" title="Reset Simulation">
+                    <i class="fa-solid fa-rotate-left"></i>
+                </button>
+                <button id="btnClearTrail" class="p-1 rounded hover:bg-slate-800 text-slate-300 transition text-[11px] px-2" title="Clear Path History">
+                    <i class="fa-solid fa-eraser"></i>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Dashboard Container (100vh minus header) -->
+    <main class="flex-1 grid grid-cols-12 gap-2 p-2 overflow-hidden h-[calc(100vh-2.5rem)] w-full">
+
+        <!-- LEFT PANEL: Compact Controls (3 Cols) -->
+        <aside class="col-span-3 bg-cardbg border border-cardborder rounded-lg p-2.5 flex flex-col justify-between overflow-hidden gap-2 shadow-sm">
+            
+            <!-- PID Tuning Controls -->
+            <div class="space-y-2">
+                <div class="flex justify-between items-center border-b border-cardborder pb-1">
+                    <h2 class="text-[11px] font-bold uppercase tracking-wider text-sky-400 flex items-center gap-1.5">
+                        <i class="fa-solid fa-sliders text-xs"></i> PID Gains
+                    </h2>
+                    <span id="antiWindupBadge" class="text-[9px] px-1.5 py-0.2 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono">Anti-Windup</span>
+                </div>
+
+                <!-- Kp Slider -->
+                <div class="space-y-0.5">
+                    <div class="flex justify-between text-[11px]">
+                        <label for="inputKp" class="text-slate-300 font-medium">Proportional ($K_p$)</label>
+                        <input type="number" id="numKp" step="0.05" min="0" max="20" class="w-12 bg-slate-900 border border-cardborder rounded px-1 text-right text-sky-400 font-mono text-[10px]">
+                    </div>
+                    <input type="range" id="inputKp" min="0" max="15" step="0.05" class="w-full cursor-pointer">
+                </div>
+
+                <!-- Ki Slider -->
+                <div class="space-y-0.5">
+                    <div class="flex justify-between text-[11px]">
+                        <label for="inputKi" class="text-slate-300 font-medium">Integral ($K_i$)</label>
+                        <input type="number" id="numKi" step="0.005" min="0" max="5" class="w-12 bg-slate-900 border border-cardborder rounded px-1 text-right text-amber-400 font-mono text-[10px]">
+                    </div>
+                    <input type="range" id="inputKi" min="0" max="2" step="0.005" class="w-full cursor-pointer">
+                </div>
+
+                <!-- Kd Slider -->
+                <div class="space-y-0.5">
+                    <div class="flex justify-between text-[11px]">
+                        <label for="inputKd" class="text-slate-300 font-medium">Derivative ($K_d$)</label>
+                        <input type="number" id="numKd" step="0.05" min="0" max="20" class="w-12 bg-slate-900 border border-cardborder rounded px-1 text-right text-emerald-400 font-mono text-[10px]">
+                    </div>
+                    <input type="range" id="inputKd" min="0" max="15" step="0.05" class="w-full cursor-pointer">
+                </div>
+            </div>
+
+            <!-- Vehicle Dynamics & Noise -->
+            <div class="space-y-2 border-t border-cardborder pt-2">
+                <h2 class="text-[11px] font-bold uppercase tracking-wider text-sky-400 flex items-center gap-1.5">
+                    <i class="fa-solid fa-gauge-high text-xs"></i> System Parameters
+                </h2>
+
+                <!-- Trajectory Selection -->
+                <div class="flex items-center justify-between text-[11px]">
+                    <label for="pathTypeSelect" class="text-slate-300">Trajectory</label>
+                    <select id="pathTypeSelect" class="bg-slate-900 border border-cardborder text-[10px] rounded px-1.5 py-0.5 text-slate-200 font-medium focus:outline-none">
+                        <option value="step">Step Response</option>
+                        <option value="sine">Sine Wave</option>
+                        <option value="square">Square Wave / Steps</option>
+                        <option value="scurve">S-Curve Transition</option>
+                    </select>
+                </div>
+
+                <!-- Speed Slider -->
+                <div class="space-y-0.5">
+                    <div class="flex justify-between text-[11px]">
+                        <span class="text-slate-300">Forward Speed ($v$)</span>
+                        <span id="speedVal" class="font-mono text-sky-400 text-[10px]">2.5 m/s</span>
+                    </div>
+                    <input type="range" id="inputSpeed" min="0.5" max="6.0" step="0.1" value="2.5" class="w-full cursor-pointer">
+                </div>
+
+                <!-- Sensor Noise -->
+                <div class="space-y-0.5">
+                    <div class="flex justify-between text-[11px]">
+                        <span class="text-slate-300">Sensor Noise ($\sigma$)</span>
+                        <span id="noiseVal" class="font-mono text-sky-400 text-[10px]">0.0</span>
+                    </div>
+                    <input type="range" id="inputNoise" min="0" max="2.5" step="0.1" value="0.0" class="w-full cursor-pointer">
+                </div>
+
+                <!-- Max Steering -->
+                <div class="space-y-0.5">
+                    <div class="flex justify-between text-[11px]">
+                        <span class="text-slate-300">Max Steer Limit ($\delta_{max}$)</span>
+                        <span id="steerLimitVal" class="font-mono text-sky-400 text-[10px]">35°</span>
+                    </div>
+                    <input type="range" id="inputSteerLimit" min="10" max="60" step="1" value="35" class="w-full cursor-pointer">
+                </div>
+            </div>
+
+            <!-- Toggles Section -->
+            <div class="space-y-1 border-t border-cardborder pt-2 text-[10px]">
+                <label class="flex items-center justify-between text-slate-300 cursor-pointer">
+                    <span>Anti-Windup Clamping</span>
+                    <input type="checkbox" id="chkAntiWindup" checked class="w-3 h-3 rounded text-sky-500 focus:ring-0">
+                </label>
+                <label class="flex items-center justify-between text-slate-300 cursor-pointer">
+                    <span>Show Error & Steering Vectors</span>
+                    <input type="checkbox" id="chkShowVectors" checked class="w-3 h-3 rounded text-sky-500 focus:ring-0">
+                </label>
+                <label class="flex items-center justify-between text-slate-300 cursor-pointer">
+                    <span>Show Reference Path</span>
+                    <input type="checkbox" id="chkShowTarget" checked class="w-3 h-3 rounded text-sky-500 focus:ring-0">
+                </label>
+            </div>
+
+            <!-- Interactive Tip Footer -->
+            <div class="bg-slate-900/80 border border-cardborder p-2 rounded text-[10px] text-slate-400 leading-tight">
+                <i class="fa-solid fa-lightbulb text-amber-400 mr-1"></i>
+                <span id="educationalTip">Tune Kp to reduce rise time, Kd to suppress overshoots, and Ki to eliminate offset.</span>
+            </div>
+        </aside>
+
+        <!-- CENTER PANEL: Main 2D Simulation Canvas (5 Cols) -->
+        <section class="col-span-5 bg-cardbg border border-cardborder rounded-lg relative overflow-hidden flex flex-col justify-between shadow-sm">
+            
+            <!-- Canvas Live HUD Overlay -->
+            <div class="absolute top-2 left-2 right-2 z-10 flex items-center justify-between pointer-events-none">
+                <div class="flex gap-1.5">
+                    <div class="bg-slate-900/90 backdrop-blur border border-cardborder px-2 py-0.5 rounded text-[10px] font-mono flex items-center gap-1.5">
+                        <span class="text-slate-400">Error $e(t)$:</span>
+                        <span id="hudError" class="font-bold text-sky-400">0.00 m</span>
+                    </div>
+                    <div class="bg-slate-900/90 backdrop-blur border border-cardborder px-2 py-0.5 rounded text-[10px] font-mono flex items-center gap-1.5">
+                        <span class="text-slate-400">Steer $u(t)$:</span>
+                        <span id="hudSteer" class="font-bold text-amber-400">0.0°</span>
+                    </div>
+                </div>
+
+                <div class="bg-slate-900/90 backdrop-blur border border-cardborder px-2 py-0.5 rounded text-[9px] flex items-center gap-2">
+                    <div class="flex items-center gap-1"><span class="w-2 h-0.5 bg-blue-500 inline-block"></span><span class="text-slate-300">Target</span></div>
+                    <div class="flex items-center gap-1"><span class="w-2 h-0.5 bg-emerald-400 inline-block"></span><span class="text-slate-300">Robot</span></div>
+                </div>
+            </div>
+
+            <!-- Canvas Workspace -->
+            <div class="w-full h-full relative flex-1">
+                <canvas id="simCanvas" class="w-full h-full block cursor-crosshair"></canvas>
+            </div>
+        </section>
+
+        <!-- RIGHT PANEL: Performance Metrics & Real-time Plots (4 Cols) -->
+        <section class="col-span-4 flex flex-col gap-2 overflow-hidden">
+
+            <!-- Metrics Cards Grid (Top half of right panel) -->
+            <div class="grid grid-cols-3 gap-1.5 shrink-0">
+                <div class="bg-cardbg border border-cardborder rounded p-1.5 text-center">
+                    <div class="text-[9px] font-semibold text-slate-400 uppercase tracking-wider">Overshoot</div>
+                    <div id="metricOvershoot" class="text-sm font-bold font-mono text-rose-400">0.0%</div>
+                </div>
+                <div class="bg-cardbg border border-cardborder rounded p-1.5 text-center">
+                    <div class="text-[9px] font-semibold text-slate-400 uppercase tracking-wider">Settling Time</div>
+                    <div id="metricSettling" class="text-sm font-bold font-mono text-sky-400">N/A</div>
+                </div>
+                <div class="bg-cardbg border border-cardborder rounded p-1.5 text-center">
+                    <div class="text-[9px] font-semibold text-slate-400 uppercase tracking-wider">RMS Error</div>
+                    <div id="metricRMS" class="text-sm font-bold font-mono text-amber-400">0.00 m</div>
+                </div>
+                <div class="bg-cardbg border border-cardborder rounded p-1.5 text-center">
+                    <div class="text-[9px] font-semibold text-slate-400 uppercase tracking-wider">Steady Error</div>
+                    <div id="metricSteady" class="text-sm font-bold font-mono text-emerald-400">0.00 m</div>
+                </div>
+                <div class="bg-cardbg border border-cardborder rounded p-1.5 text-center">
+                    <div class="text-[9px] font-semibold text-slate-400 uppercase tracking-wider">Integral Windup</div>
+                    <div id="metricIntegral" class="text-sm font-bold font-mono text-indigo-400">0.00</div>
+                </div>
+                <div class="bg-cardbg border border-cardborder rounded p-1.5 text-center">
+                    <div class="text-[9px] font-semibold text-slate-400 uppercase tracking-wider">Control Effort</div>
+                    <div id="metricEffort" class="text-sm font-bold font-mono text-purple-400">0.0°</div>
+                </div>
+            </div>
+
+            <!-- Diagnostics Chart 1: Cross-Track Error e(t) -->
+            <div class="flex-1 bg-cardbg border border-cardborder p-2 rounded-lg flex flex-col relative min-h-0">
+                <div class="flex justify-between items-center mb-1">
+                    <span class="text-[10px] font-bold text-slate-300 uppercase tracking-wider">Cross-Track Error $e(t)$</span>
+                    <span class="text-[9px] font-mono text-slate-500">Meters vs Time</span>
+                </div>
+                <div class="flex-1 relative w-full h-full min-h-0">
+                    <canvas id="chartError"></canvas>
+                </div>
+            </div>
+
+            <!-- Diagnostics Chart 2: PID Term Components Effort -->
+            <div class="flex-1 bg-cardbg border border-cardborder p-2 rounded-lg flex flex-col relative min-h-0">
+                <div class="flex justify-between items-center mb-1">
+                    <span class="text-[10px] font-bold text-slate-300 uppercase tracking-wider">PID Control Components</span>
+                    <span class="text-[9px] font-mono text-slate-500">Steer Angle Effort (deg)</span>
+                </div>
+                <div class="flex-1 relative w-full h-full min-h-0">
+                    <canvas id="chartPID"></canvas>
+                </div>
+            </div>
+
+        </section>
+    </main>
+
+    <script>
+        /**
+         * Mobile Robot Kinematic Simulation & Discrete PID Control Studio
+         * Designed for single-screen responsive viewports
+         */
+
+        // System State Dictionary
+        const state = {
+            running: true,
+            time: 0,
+            dt: 0.05, // Step time in seconds
+            
+            // PID Controller Gains
+            kp: 2.50,
+            ki: 0.02,
+            kd: 1.40,
+            antiWindup: true,
+
+            // Mobile Robot Dynamics
+            robot: {
+                x: 40,
+                y: 120,
+                heading: 0,
+                speed: 2.5,
+                steerAngle: 0,
+                steerLimit: Math.PI / 180 * 35, // Radians
+                wheelBase: 22,
+                width: 13
+            },
+
+            // PID Internal State
+            pid: {
+                integral: 0,
+                prevError: 0,
+                pTerm: 0,
+                iTerm: 0,
+                dTerm: 0,
+                output: 0
+            },
+
+            // Environment & Path
+            noise: 0.0,
+            pathType: 'step', // 'step', 'sine', 'square', 'scurve'
+            showVectors: true,
+            showTarget: true,
+
+            // Data Streams for Diagnostic Plots
+            robotTrail: [],
+            historyTime: [],
+            historyError: [],
+            historyP: [],
+            historyI: [],
+            historyD: [],
+            maxHistory: 120,
+
+            // Diagnostic Metrics Calculation
+            initialOffset: 0,
+            peakOvershoot: 0,
+            squaredErrorSum: 0,
+            stepCount: 0,
+            settledTime: null
+        };
+
+        // DOM Element Mapping
+        const elements = {
+            inputKp: document.getElementById('inputKp'),
+            numKp: document.getElementById('numKp'),
+            inputKi: document.getElementById('inputKi'),
+            numKi: document.getElementById('numKi'),
+            inputKd: document.getElementById('inputKd'),
+            numKd: document.getElementById('numKd'),
+            inputSpeed: document.getElementById('inputSpeed'),
+            speedVal: document.getElementById('speedVal'),
+            inputNoise: document.getElementById('inputNoise'),
+            noiseVal: document.getElementById('noiseVal'),
+            inputSteerLimit: document.getElementById('inputSteerLimit'),
+            steerLimitVal: document.getElementById('steerLimitVal'),
+            pathTypeSelect: document.getElementById('pathTypeSelect'),
+            presetSelect: document.getElementById('presetSelect'),
+            chkAntiWindup: document.getElementById('chkAntiWindup'),
+            chkShowVectors: document.getElementById('chkShowVectors'),
+            chkShowTarget: document.getElementById('chkShowTarget'),
+            antiWindupBadge: document.getElementById('antiWindupBadge'),
+            btnPlayPause: document.getElementById('btnPlayPause'),
+            playIcon: document.getElementById('playIcon'),
+            playText: document.getElementById('playText'),
+            btnReset: document.getElementById('btnReset'),
+            btnClearTrail: document.getElementById('btnClearTrail'),
+            hudError: document.getElementById('hudError'),
+            hudSteer: document.getElementById('hudSteer'),
+            metricOvershoot: document.getElementById('metricOvershoot'),
+            metricSettling: document.getElementById('metricSettling'),
+            metricRMS: document.getElementById('metricRMS'),
+            metricSteady: document.getElementById('metricSteady'),
+            metricIntegral: document.getElementById('metricIntegral'),
+            metricEffort: document.getElementById('metricEffort'),
+            educationalTip: document.getElementById('educationalTip'),
+            canvas: document.getElementById('simCanvas')
+        };
+
+        const ctx = elements.canvas.getContext('2d');
+        let chartErrorInstance = null;
+        let chartPIDInstance = null;
+
+        function initCharts() {
+            const chartOptions = {
+                responsive: true,
+                maintainAspectRatio: false,
+                animation: false,
+                layout: { padding: 0 },
+                scales: {
+                    x: { display: false },
+                    y: {
+                        grid: { color: '#1f293d' },
+                        ticks: { color: '#64748b', font: { size: 9 } }
+                    }
+                },
+                plugins: {
+                    legend: { display: false }
+                }
+            };
+
+            // Error Plot
+            const ctxErr = document.getElementById('chartError').getContext('2d');
+            chartErrorInstance = new Chart(ctxErr, {
+                type: 'line',
+                data: {
+                    labels: state.historyTime,
+                    datasets: [{
+                        data: state.historyError,
+                        borderColor: '#38bdf8',
+                        borderWidth: 1.5,
+                        pointRadius: 0,
+                        tension: 0.1
+                    }]
+                },
+                options: chartOptions
+            });
+
+            // PID Breakdown Plot
+            const ctxPID = document.getElementById('chartPID').getContext('2d');
+            chartPIDInstance = new Chart(ctxPID, {
+                type: 'line',
+                data: {
+                    labels: state.historyTime,
+                    datasets: [
+                        { label: 'P', data: state.historyP, borderColor: '#38bdf8', borderWidth: 1.2, pointRadius: 0 },
+                        { label: 'I', data: state.historyI, borderColor: '#f59e0b', borderWidth: 1.2, pointRadius: 0 },
+                        { label: 'D', data: state.historyD, borderColor: '#10b981', borderWidth: 1.2, pointRadius: 0 }
+                    ]
+                },
+                options: {
+                    ...chartOptions,
+                    plugins: {
+                        legend: {
+                            display: true,
+                            position: 'top',
+                            labels: { color: '#94a3b8', font: { size: 8 }, boxWidth: 6, padding: 4 }
+                        }
+                    }
+                }
+            });
+        }
+
+        // Trajectory Generator y = f(x)
+        function getTargetPathY(x) {
+            const canvasHeight = elements.canvas.height || 300;
+            const centerY = canvasHeight / 2;
+
+            switch (state.pathType) {
+                case 'step':
+                    return x < 120 ? centerY - 50 : centerY + 35;
+                case 'sine':
+                    return centerY + Math.sin(x * 0.02) * 50;
+                case 'square':
+                    const cycle = Math.floor(x / 120) % 2;
+                    return cycle === 0 ? centerY - 45 : centerY + 45;
+                case 'scurve':
+                    if (x < 100) return centerY - 45;
+                    if (x > 300) return centerY + 45;
+                    const t = (x - 100) / 200;
+                    const smooth = t * t * (3 - 2 * t);
+                    return (centerY - 45) + smooth * 90;
+                default:
+                    return centerY;
+            }
+        }
+
+        function stepSimulation() {
+            if (!state.running) return;
+
+            const r = state.robot;
+            const targetY = getTargetPathY(r.x);
+
+            // Cross-track Error Calculation
+            let error = r.y - targetY;
+
+            // Optional Gaussian-like sensor measurement noise
+            if (state.noise > 0) {
+                error += (Math.random() - 0.5) * state.noise * 6;
+            }
+
+            // 1. Proportional Term
+            state.pid.pTerm = state.kp * error;
+
+            // 2. Integral Term & Anti-Windup Clamping
+            state.pid.integral += error * state.dt;
+            if (state.antiWindup) {
+                const maxIntegral = 12.0;
+                state.pid.integral = Math.max(-maxIntegral, Math.min(maxIntegral, state.pid.integral));
+            }
+            state.pid.iTerm = state.ki * state.pid.integral;
+
+            // 3. Derivative Term
+            const dError = (error - state.pid.prevError) / state.dt;
+            state.pid.dTerm = state.kd * dError;
+
+            // 4. Combined Steering Output (Angle in Radians)
+            let steeringAngle = -(state.pid.pTerm + state.pid.iTerm + state.pid.dTerm) * (Math.PI / 180);
+
+            // Steering Saturation / Mechanical Limit
+            steeringAngle = Math.max(-r.steerLimit, Math.min(r.steerLimit, steeringAngle));
+
+            r.steerAngle = steeringAngle;
+            state.pid.output = steeringAngle * (180 / Math.PI);
+            state.pid.prevError = error;
+
+            // 5. Kinematic Differential Drive Motion Equations
+            r.heading += (r.speed / r.wheelBase) * Math.sin(r.steerAngle);
+            r.x += r.speed * Math.cos(r.heading);
+            r.y += r.speed * Math.sin(r.heading);
+
+            // Screen Wrap-Around
+            if (r.x > elements.canvas.width + 30) {
+                r.x = -20;
+                state.robotTrail = [];
+            }
+
+            // Record path trail
+            state.robotTrail.push({ x: r.x, y: r.y });
+            if (state.robotTrail.length > 400) state.robotTrail.shift();
+
+            // 6. Record Time Series Data for Diagnostic Charts
+            state.time += state.dt;
+            state.historyTime.push(state.time.toFixed(1));
+            state.historyError.push(error.toFixed(2));
+            state.historyP.push((-state.pid.pTerm).toFixed(1));
+            state.historyI.push((-state.pid.iTerm).toFixed(1));
+            state.historyD.push((-state.pid.dTerm).toFixed(1));
+
+            if (state.historyTime.length > state.maxHistory) {
+                state.historyTime.shift();
+                state.historyError.shift();
+                state.historyP.shift();
+                state.historyI.shift();
+                state.historyD.shift();
+            }
+
+            // 7. Diagnostics Metrics Calculation
+            const absErr = Math.abs(error);
+            if (state.stepCount === 0) state.initialOffset = absErr || 1.0;
+            
+            // Peak Overshoot Percentage
+            const currentOvershoot = Math.max(0, ((absErr - state.initialOffset) / state.initialOffset) * 100);
+            if (currentOvershoot > state.peakOvershoot) state.peakOvershoot = currentOvershoot;
+
+            state.squaredErrorSum += error * error;
+            state.stepCount++;
+
+            // Settling Time calculation (within ±5% band)
+            const settlingBand = Math.max(1.5, state.initialOffset * 0.05);
+            if (absErr <= settlingBand && state.settledTime === null && state.time > 0.8) {
+                state.settledTime = state.time;
+            } else if (absErr > settlingBand) {
+                state.settledTime = null;
+            }
+
+            // DOM Metric Updates
+            elements.hudError.textContent = `${error.toFixed(2)} m`;
+            elements.hudSteer.textContent = `${(r.steerAngle * 180 / Math.PI).toFixed(1)}°`;
+            
+            elements.metricOvershoot.textContent = `${state.peakOvershoot.toFixed(1)}%`;
+            const rms = Math.sqrt(state.squaredErrorSum / state.stepCount);
+            elements.metricRMS.textContent = `${rms.toFixed(2)} m`;
+            elements.metricSettling.textContent = state.settledTime ? `${state.settledTime.toFixed(1)} s` : 'Unsettled';
+            elements.metricSteady.textContent = `${error.toFixed(2)} m`;
+            elements.metricIntegral.textContent = state.pid.integral.toFixed(2);
+            elements.metricEffort.textContent = `${state.pid.output.toFixed(1)}°`;
+        }
+
+        function drawSimulation() {
+            const width = elements.canvas.width;
+            const height = elements.canvas.height;
+
+            // Dark canvas background
+            ctx.fillStyle = '#111827';
+            ctx.fillRect(0, 0, width, height);
+
+            // Subtle Grid
+            ctx.strokeStyle = '#1f293d';
+            ctx.lineWidth = 1;
+            for (let x = 0; x < width; x += 30) {
+                ctx.beginPath();
+                ctx.moveTo(x, 0);
+                ctx.lineTo(x, height);
+                ctx.stroke();
+            }
+            for (let y = 0; y < height; y += 30) {
+                ctx.beginPath();
+                ctx.moveTo(0, y);
+                ctx.lineTo(width, y);
+                ctx.stroke();
+            }
+
+            // Draw Reference Path
+            if (state.showTarget) {
+                ctx.strokeStyle = '#3b82f6';
+                ctx.lineWidth = 2.5;
+                ctx.beginPath();
+                for (let x = 0; x <= width; x += 4) {
+                    const y = getTargetPathY(x);
+                    if (x === 0) ctx.moveTo(x, y);
+                    else ctx.lineTo(x, y);
+                }
+                ctx.stroke();
+            }
+
+            // Draw Robot Trajectory History Trail
+            if (state.robotTrail.length > 1) {
+                ctx.strokeStyle = '#10b981';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(state.robotTrail[0].x, state.robotTrail[0].y);
+                for (let i = 1; i < state.robotTrail.length; i++) {
+                    ctx.lineTo(state.robotTrail[i].x, state.robotTrail[i].y);
+                }
+                ctx.stroke();
+            }
+
+            // Render Mobile Robot Body
+            const r = state.robot;
+            ctx.save();
+            ctx.translate(r.x, r.y);
+            ctx.rotate(r.heading);
+
+            // Body Shadow
+            ctx.fillStyle = 'rgba(0,0,0,0.4)';
+            ctx.fillRect(-r.wheelBase/2 + 2, -r.width/2 + 2, r.wheelBase, r.width);
+
+            // Main Chassis
+            ctx.fillStyle = '#f59e0b';
+            ctx.strokeStyle = '#d97706';
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.roundRect(-r.wheelBase/2, -r.width/2, r.wheelBase, r.width, 3);
+            ctx.fill();
+            ctx.stroke();
+
+            // Fixed Rear Wheels
+            ctx.fillStyle = '#030712';
+            ctx.fillRect(-r.wheelBase/2, -r.width/2 - 2, 6, 2.5);
+            ctx.fillRect(-r.wheelBase/2, r.width/2 - 0.5, 6, 2.5);
+
+            // Front Steered Wheels
+            ctx.save();
+            ctx.translate(r.wheelBase/2 - 3, -r.width/2);
+            ctx.rotate(r.steerAngle);
+            ctx.fillRect(-3, -1.2, 6, 2.5);
+            ctx.restore();
+
+            ctx.save();
+            ctx.translate(r.wheelBase/2 - 3, r.width/2);
+            ctx.rotate(r.steerAngle);
+            ctx.fillRect(-3, -1.2, 6, 2.5);
+            ctx.restore();
+
+            // Heading Vector
+            ctx.strokeStyle = '#f87171';
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.moveTo(0, 0);
+            ctx.lineTo(18, 0);
+            ctx.stroke();
+
+            ctx.restore();
+
+            // Error Vector Line
+            if (state.showVectors) {
+                const targetY = getTargetPathY(r.x);
+                ctx.strokeStyle = '#ef4444';
+                ctx.lineWidth = 1;
+                ctx.setLineDash([2, 2]);
+                ctx.beginPath();
+                ctx.moveTo(r.x, r.y);
+                ctx.lineTo(r.x, targetY);
+                ctx.stroke();
+                ctx.setLineDash([]);
+
+                ctx.fillStyle = '#38bdf8';
+                ctx.beginPath();
+                ctx.arc(r.x, targetY, 3, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+
+        function updateUIFromState() {
+            elements.inputKp.value = state.kp;
+            elements.numKp.value = state.kp;
+            elements.inputKi.value = state.ki;
+            elements.numKi.value = state.ki;
+            elements.inputKd.value = state.kd;
+            elements.numKd.value = state.kd;
+            
+            elements.chkAntiWindup.checked = state.antiWindup;
+            elements.antiWindupBadge.style.display = state.antiWindup ? 'inline-block' : 'none';
+
+            // Educational tip selector
+            if (state.kp > 7) {
+                elements.educationalTip.textContent = "High Kp causes sharp overcorrections and severe oscillation around the target trajectory.";
+            } else if (state.ki > 0.3 && !state.antiWindup) {
+                elements.educationalTip.textContent = "High Ki without Anti-Windup saturates the integral term, causing massive overshoot during direction changes.";
+            } else if (state.noise > 1.0) {
+                elements.educationalTip.textContent = "High Derivative gain (Kd) amplifies sensor noise. Consider reducing Kd or filtering input signals.";
+            } else {
+                elements.educationalTip.textContent = "Proportional drives error correction, Integral clears steady bias, and Derivative damps oscillations.";
+            }
+        }
+
+        function applyPreset(presetKey) {
+            switch (presetKey) {
+                case 'tuned':
+                    state.kp = 2.5; state.ki = 0.02; state.kd = 1.4;
+                    state.noise = 0.0; state.antiWindup = true;
+                    break;
+                case 'unstable':
+                    state.kp = 10.0; state.ki = 0.0; state.kd = 0.1;
+                    state.noise = 0.0; state.antiWindup = false;
+                    break;
+                case 'windup':
+                    state.kp = 3.0; state.ki = 0.6; state.kd = 0.2;
+                    state.noise = 0.0; state.antiWindup = false;
+                    break;
+                case 'noisy':
+                    state.kp = 2.0; state.ki = 0.01; state.kd = 2.5;
+                    state.noise = 1.5; state.antiWindup = true;
+                    break;
+                case 'p_only':
+                    state.kp = 1.8; state.ki = 0.0; state.kd = 0.0;
+                    state.noise = 0.0; state.antiWindup = false;
+                    break;
+                case 'pd_only':
+                    state.kp = 2.5; state.ki = 0.0; state.kd = 1.5;
+                    state.noise = 0.0; state.antiWindup = false;
+                    break;
+            }
+            elements.inputNoise.value = state.noise;
+            elements.noiseVal.textContent = state.noise.toFixed(1);
+            resetSimulation();
+            updateUIFromState();
+        }
+
+        function resetSimulation() {
+            const height = elements.canvas.height || 300;
+            state.robot.x = 35;
+            state.robot.y = height / 2 - 50;
+            state.robot.heading = 0;
+            state.robot.steerAngle = 0;
+            
+            state.pid.integral = 0;
+            state.pid.prevError = 0;
+            
+            state.time = 0;
+            state.robotTrail = [];
+            state.historyTime = [];
+            state.historyError = [];
+            state.historyP = [];
+            state.historyI = [];
+            state.historyD = [];
+            
+            state.peakOvershoot = 0;
+            state.squaredErrorSum = 0;
+            state.stepCount = 0;
+            state.settledTime = null;
+        }
+
+        function setupEventListeners() {
+            // Gain controls
+            elements.inputKp.addEventListener('input', (e) => { state.kp = parseFloat(e.target.value); elements.numKp.value = state.kp; updateUIFromState(); });
+            elements.numKp.addEventListener('change', (e) => { state.kp = Math.max(0, parseFloat(e.target.value) || 0); elements.inputKp.value = state.kp; updateUIFromState(); });
+
+            elements.inputKi.addEventListener('input', (e) => { state.ki = parseFloat(e.target.value); elements.numKi.value = state.ki; updateUIFromState(); });
+            elements.numKi.addEventListener('change', (e) => { state.ki = Math.max(0, parseFloat(e.target.value) || 0); elements.inputKi.value = state.ki; updateUIFromState(); });
+
+            elements.inputKd.addEventListener('input', (e) => { state.kd = parseFloat(e.target.value); elements.numKd.value = state.kd; updateUIFromState(); });
+            elements.numKd.addEventListener('change', (e) => { state.kd = Math.max(0, parseFloat(e.target.value) || 0); elements.inputKd.value = state.kd; updateUIFromState(); });
+
+            // Dynamics
+            elements.inputSpeed.addEventListener('input', (e) => { state.robot.speed = parseFloat(e.target.value); elements.speedVal.textContent = `${state.robot.speed.toFixed(1)} m/s`; });
+            elements.inputNoise.addEventListener('input', (e) => { state.noise = parseFloat(e.target.value); elements.noiseVal.textContent = state.noise.toFixed(1); updateUIFromState(); });
+            elements.inputSteerLimit.addEventListener('input', (e) => { const deg = parseFloat(e.target.value); state.robot.steerLimit = deg * (Math.PI / 180); elements.steerLimitVal.textContent = `${deg}°`; });
+
+            // Toggles
+            elements.chkAntiWindup.addEventListener('change', (e) => { state.antiWindup = e.target.checked; updateUIFromState(); });
+            elements.chkShowVectors.addEventListener('change', (e) => { state.showVectors = e.target.checked; });
+            elements.chkShowTarget.addEventListener('change', (e) => { state.showTarget = e.target.checked; });
+
+            // Selections
+            elements.pathTypeSelect.addEventListener('change', (e) => { state.pathType = e.target.value; resetSimulation(); });
+            elements.presetSelect.addEventListener('change', (e) => { applyPreset(e.target.value); });
+
+            // Buttons
+            elements.btnPlayPause.addEventListener('click', () => {
+                state.running = !state.running;
+                elements.playIcon.className = state.running ? 'fa-solid fa-pause' : 'fa-solid fa-play';
+                elements.playText.textContent = state.running ? 'Pause' : 'Play';
+            });
+            elements.btnReset.addEventListener('click', resetSimulation);
+            elements.btnClearTrail.addEventListener('click', () => { state.robotTrail = []; });
+
+            window.addEventListener('resize', resizeCanvas);
+        }
+
+        function resizeCanvas() {
+            const container = elements.canvas.parentElement;
+            if (container) {
+                elements.canvas.width = container.clientWidth;
+                elements.canvas.height = container.clientHeight;
+            }
+        }
+
+        function animate() {
+            stepSimulation();
+            drawSimulation();
+
+            if (chartErrorInstance && chartPIDInstance && state.running) {
+                chartErrorInstance.update('none');
+                chartPIDInstance.update('none');
+            }
+
+            requestAnimationFrame(animate);
+        }
+
+        window.onload = function() {
+            resizeCanvas();
+            initCharts();
+            setupEventListeners();
+            updateUIFromState();
+            resetSimulation();
+            animate();
+        };
+    </script>
+</body>
+</html>
